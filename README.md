@@ -23,6 +23,8 @@ Current secret-detection tools are pattern-based and reactive — they scan for 
        9. Colorized, readable terminal output.
        11. Stretch: GitHub Action wrapper for CI enforcement on push/PR.
        12. Stretch: JSON/HTML export of scan results.
+# ADDITIONAL FEATURE
+      - This can be used in VS code extension in real life. 
 # TECH STACK
        - Python 3.11+
        - click (CLI)

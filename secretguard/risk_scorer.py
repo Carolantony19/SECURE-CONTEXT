@@ -73,12 +73,17 @@ def score_finding(
     if finding.placeholder_swap:
         raw_score += SWAP_BONUS
 
+    if finding.has_taint_flow:
+        raw_score += 3.0  # Taint flow to sink bonus
+
     # ── Label mapping ───────────────────────────────────────────────────
-    if raw_score >= HIGH_THRESHOLD:
+    if raw_score >= HIGH_THRESHOLD or finding.has_taint_flow:
         finding.risk = "HIGH"
         reasons = [f"High entropy ({finding.entropy:.2f} bits)"]
         if finding.placeholder_swap:
             reasons.append("Placeholder-to-secret swap detected")
+        if finding.has_taint_flow:
+            reasons.append("Secret propagates to dangerous sink (tainted_flow_to_sink)")
         if fw > 1.0:
             reasons.append(f"Sensitive file type ({ext or Path(finding.file).name})")
         if finding.commit_sha:
@@ -92,6 +97,7 @@ def score_finding(
     else:
         finding.risk = "LOW"
         finding.reason = f"Low composite score ({raw_score:.2f})."
+
 
     return finding
 

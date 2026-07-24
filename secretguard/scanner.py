@@ -44,6 +44,8 @@ class Finding:
     masked_value: str = ""
     commit_sha: str = ""     # For history-based findings
     rule_id: str = ""        # For custom-rule matches
+    has_taint_flow: bool = False
+    taint_trace: Any = None
 
     def mask(self, reveal: int = 6) -> str:
         """Return a masked version showing only the first *reveal* characters."""

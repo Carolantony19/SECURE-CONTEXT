@@ -125,6 +125,10 @@ def check(staged: bool, threshold: float, fmt: str, output: Optional[str]) -> No
 @click.argument("path", type=click.Path(exists=True), default=".")
 @click.option("--history", is_flag=True, default=False,
               help="Walk full git history for placeholder-lineage swaps.")
+@click.option("--taint", is_flag=True, default=False,
+              help="Run interprocedural taint & secret-flow analysis.")
+@click.option("--all", "all_modes", is_flag=True, default=False,
+              help="Run all detection engines (regex/entropy/placeholders + history + taint).")
 @click.option("--threshold", "-t", type=float, default=4.5,
               show_default=True, help="Shannon entropy threshold (bits).")
 @click.option("--format", "fmt", type=click.Choice(["terminal", "json", "sarif"]),
@@ -136,15 +140,16 @@ def check(staged: bool, threshold: float, fmt: str, output: Optional[str]) -> No
 @click.option("--no-block", is_flag=True, default=False,
               help="Don't exit with non-zero on HIGH findings.")
 def scan(
-    path: str, history: bool, threshold: float,
+    path: str, history: bool, taint: bool, all_modes: bool, threshold: float,
     fmt: str, output: Optional[str], verbose: bool, no_block: bool,
 ) -> None:
-    """Scan a file or directory for hardcoded secrets.
+    """Scan a file or directory for hardcoded secrets and secret flows.
 
     Examples:
         secretguard scan .
+        secretguard scan . --taint
+        secretguard scan . --all
         secretguard scan src/ --threshold 5.0 --format json -o report.json
-        secretguard scan . --history
     """
     target = Path(path).resolve()
     config = ScanConfig.load(target if target.is_dir() else target.parent)
@@ -153,6 +158,10 @@ def scan(
     config.output_file = Path(output) if output else None
     config.verbose = verbose
     config.block_on_high = not no_block
+
+    if all_modes:
+        history = True
+        taint = True
 
     findings: list[Finding] = []
 
@@ -169,11 +178,36 @@ def scan(
         score_findings(lineage, config, target)
         findings.extend(lineage)
 
+    # Taint mode: interprocedural secret-flow analysis
+    flows = []
+    if taint:
+        click.echo("🧪 Running interprocedural taint analysis engine…")
+        from secretguard.taint.taint_tracker import TaintEngine
+        from secretguard.taint.report import render_taint_terminal
+
+        py_files = [f for f in (target.rglob("*.py") if target.is_dir() else [target]) if f.is_file()]
+        engine = TaintEngine(target if target.is_dir() else target.parent)
+        engine.load_repository(py_files)
+        flows = engine.analyze_sources(findings)
+
+        # Mark matching findings with has_taint_flow = True
+        flow_origins = {(str(fl.origin_file.resolve()), fl.origin_line, fl.origin_variable) for fl in flows}
+        for f in findings:
+            if (str(Path(f.file).resolve()), f.line_number, f.variable) in flow_origins:
+                f.has_taint_flow = True
+                f.taint_trace = flows
+
+        score_findings(findings, config, target if target.is_dir() else target.parent)
+
     display = findings if verbose else [
         f for f in findings if f.risk not in ("LOW", "SUPPRESSED")
     ]
 
     _output(display, config)
+
+    if taint and flows and fmt == "terminal":
+        from secretguard.taint.report import render_taint_terminal
+        render_taint_terminal(flows)
 
     if fmt == "json" and output:
         export_json(findings, Path(output))
@@ -183,6 +217,7 @@ def scan(
     high_count = sum(1 for f in findings if f.risk == "HIGH")
     if high_count > 0 and config.block_on_high:
         sys.exit(1)
+
 
 
 # ── init command ────────────────────────────────────────────────────────────

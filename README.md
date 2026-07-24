@@ -88,6 +88,59 @@ Current secret-detection tools are pattern-based and reactive — they scan for 
          │ - Auto-fix prompt (.env insert) │
          └─────────────────────────────────┘
 # WORKFLOW
+     ──────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │                                       TRIGGER PHASE                                               │
+    │                                                                                                  │
+    │   Developer runs `git commit`  OR  `secretguard scan <path>`  OR  GitHub PR Action               │
+    └─────────────────────────────────┬────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+    ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │                                   PHASE 1: FILE DISCOVERY                                        │
+    │                                                                                                  │
+    │   [GitPython / File System] ──> Filter by Extension (.py, .js, .env, .json, .yaml)               │
+    │                             ──> Exclude Ignore Patterns (node_modules, venv, .git)              │
+    └─────────────────────────────────┬────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+    ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │                                PHASE 2: DETECTION PIPELINE                                       │
+    │                                                                                                  │
+    │  [1. Regex Scanner]         Finds key assignments: `api_key = "..."`, `SECRET: "..."`           │
+    │         │                                                                                        │
+    │         ▼                                                                                        │
+    │  [2. Length Cutoff]         Filters out trivial values (< 8 chars)                               │
+    │         │                                                                                        │
+    │         ▼                                                                                        │
+    │  [3. Entropy Calculator]    Computes Shannon entropy: H(X) = -Σ p(x) log₂(p(x))                 │
+    │         │                                                                                        │
+    │         ▼                                                                                        │
+    │  [4. Placeholder Engine]    Matches against 25+ AI patterns (`YOUR_API_KEY_HERE`, `<KEY>`, etc.)  │
+    │         │                                                                                        │
+    │         ▼                                                                                        │
+    │  [5. Diff Analyzer]         Checks HEAD history: Did `old_val` = placeholder  AND                 │
+    │                             `new_val` = high-entropy candidate? (Placeholder Swap)               │
+    └─────────────────────────────────┬────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+    ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │                                PHASE 3: COMPOSITE RISK SCORING                                   │
+    │                                                                                                  │
+    │   Raw Score = Entropy × Charset Bonus (1.0 - 1.45) × File Weight (.env=1.5, .py=1.2)            │
+    │   If Placeholder Swap Detected  ──>  +2.0 Swap Bonus                                             │
+    │                                                                                                  │
+    │   Score Limits:  Score ≥ 7.0 ──> 🔴 HIGH  │  Score ≥ 5.0 ──> 🟡 MEDIUM  │  Else ──> 🟢 LOW         │
+    └─────────────────────────────────┬────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+    ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │                                PHASE 4: REPORT & ENFORCEMENT                                     │
+    │                                                                                                  │
+    │   Rich Terminal Report / JSON Export / HTML Dashboard                                            │
+    │                                                                                                  │
+    │   If 🔴 HIGH Findings Exist  ──> ⛔ Block Commit (Exit 1) + Show Remediation Guide              │
+    │   If Clean or Low Risk      ──> ✅ Allow Commit (Exit 0)                                       │
+    └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 # FOLDER STRUCTURE
           secretguard-ai/
 

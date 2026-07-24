@@ -3,51 +3,66 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "secretguard-ai"
-version = "0.1.0"
-description = "Pre-commit security tool that detects hardcoded secrets introduced through AI-assisted coding"
+name = "secretguard"
+version = "1.0.0"
+description = "Production-grade pre-commit security tool that detects hardcoded secrets and AI-placeholder-to-credential substitution"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [
     {name = "SecretGuard Contributors"}
 ]
-keywords = ["security", "secrets", "pre-commit", "AI", "credential-detection"]
+keywords = ["security", "secrets", "pre-commit", "AI", "credential-detection", "SAST"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Security",
     "Topic :: Software Development :: Quality Assurance",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
 ]
 dependencies = [
     "click>=8.1",
     "gitpython>=3.1",
     "rich>=13.0",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
-]
-ci = [
-    "flask>=3.0",
+    "pytest-xdist>=3.5",
 ]
 
 [project.scripts]
 secretguard = "secretguard.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/your-org/secretguard-ai"
-Repository = "https://github.com/your-org/secretguard-ai"
+Homepage = "https://github.com/Carolantony19/SECURE-CONTEXT"
+Repository = "https://github.com/Carolantony19/SECURE-CONTEXT"
+Issues = "https://github.com/Carolantony19/SECURE-CONTEXT/issues"
 
 [tool.setuptools.packages.find]
-include = ["secretguard*", "hooks*"]
+include = ["secretguard*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+markers = [
+    "integration: marks tests that create real git repos (deselect with '-m \"not integration\"')",
+    "benchmark: marks benchmark tests",
+]
+
+[tool.coverage.run]
+source = ["secretguard"]
+omit = ["tests/*", "benchmarks/*"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true

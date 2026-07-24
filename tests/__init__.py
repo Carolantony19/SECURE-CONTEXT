@@ -1,1 +1,1 @@
-# Test suite __init__ (required for pytest discovery)
+"""SecretGuard AI test suite."""

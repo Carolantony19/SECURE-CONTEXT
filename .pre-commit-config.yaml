@@ -1,13 +1,12 @@
-# See https://pre-commit.com for more information
-# See https://pre-commit.com/hooks.html for more hooks
 repos:
   - repo: local
     hooks:
       - id: secretguard
-        name: SecretGuard-AI Secret Scanner
-        entry: secretguard hook
+        name: SecretGuard AI
+        description: Detect hardcoded secrets and placeholder swaps
+        entry: secretguard check --staged
         language: python
-        always_run: true
+        types: [text]
         stages: [pre-commit]
+        always_run: true
         pass_filenames: false
-        additional_dependencies: []

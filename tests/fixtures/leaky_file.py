@@ -5,10 +5,10 @@
 api_key = "sk-proj-aB3xK9mNpQ7rT2wU5yZ8cE1fH4jL6oI0sVdGkWnXbCqRtMvAeYu"
 
 # Fake database password (high entropy, sensitive variable name)
-db_password = "xK9#mN$pQ7&rT2!wU5^yZ8*cE1@fH4"
+db_password = "xK9mNpQ7rT2wU5yZ8cE1fH4jL6oI0sVdGk"
 
-# Fake GitHub token (high entropy, matches token pattern)
-github_token = "token_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+# Fake token (high entropy, matches token pattern)
+auth_token = "token_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
 
 # Fake AWS secret key (high entropy)
 aws_secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"

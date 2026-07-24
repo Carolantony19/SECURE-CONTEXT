@@ -1,116 +1,145 @@
 """
-Configuration module for SecretGuard-AI.
+Configuration loader for SecretGuard AI.
 
-Centralizes all tunable parameters: entropy thresholds, file extensions,
-path exclusions, and output preferences. Every other module imports from here
-rather than hardcoding magic numbers.
+Loads settings from three sources, in priority order:
+1. CLI flags (highest priority)
+2. ``secretguard.toml`` in the project root
+3. Built-in defaults (lowest priority)
+
+Also loads the ``.secretguardignore`` allowlist via :mod:`secretguard.allowlist`.
 """
 
 from __future__ import annotations
 
-import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+# Python 3.11+ ships tomllib in the stdlib; earlier versions need tomli.
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ImportError:
+        tomllib = None  # type: ignore[assignment]
 
 
-# ── Default values ──────────────────────────────────────────────────────────
+# ── Defaults ────────────────────────────────────────────────────────────────
 
-#: Shannon entropy threshold (bits). Values above this are considered
-#: "high-entropy" — likely real credentials rather than English words or
-#: simple placeholders. Empirically, English text ≈ 3.5–4.5 bits;
-#: base64/hex secrets ≈ 4.5–6.0 bits.
 DEFAULT_ENTROPY_THRESHOLD: float = 4.5
-
-#: File extensions the scanner considers by default.
 DEFAULT_SCAN_EXTENSIONS: frozenset[str] = frozenset(
-    {".py", ".js", ".ts", ".env", ".yaml", ".yml", ".json", ".toml", ".cfg", ".ini"}
+    {".py", ".js", ".ts", ".env", ".yaml", ".yml", ".json",
+     ".toml", ".cfg", ".ini", ".tf"}
 )
-
-#: Glob patterns for paths to ignore during scans.
+DEFAULT_SCAN_FILENAMES: frozenset[str] = frozenset(
+    {"Dockerfile", ".env", ".env.local", ".env.production"}
+)
 DEFAULT_EXCLUDE_PATTERNS: list[str] = [
-    "node_modules/**",
-    ".git/**",
-    "__pycache__/**",
-    "*.pyc",
-    "venv/**",
-    ".venv/**",
-    "dist/**",
-    "build/**",
-    "*.egg-info/**",
-    ".tox/**",
-    "*.lock",
+    "node_modules/**", ".git/**", "__pycache__/**", "*.pyc",
+    "venv/**", ".venv/**", "dist/**", "build/**",
+    "*.egg-info/**", ".tox/**", "*.lock", "*.min.js",
 ]
-
-#: Minimum length for a value to be worth scoring for entropy.
-#: Very short strings (≤8 chars) rarely contain meaningful secrets.
 MIN_SECRET_LENGTH: int = 8
-
-#: Maximum number of findings shown in the terminal summary before
-#: truncating with "… and N more".
-MAX_TERMINAL_FINDINGS: int = 50
+MAX_FILE_SIZE_BYTES: int = 10 * 1024 * 1024  # 10 MB
+MAX_TERMINAL_FINDINGS: int = 100
 
 
-# ── Runtime configuration dataclass ────────────────────────────────────────
+@dataclass
+class CustomRule:
+    """A user-defined regex detection rule from ``secretguard.toml``."""
+    id: str
+    pattern: str
+    description: str = ""
+    severity: str = "HIGH"
 
 
 @dataclass
 class ScanConfig:
-    """Runtime-mutable scan configuration.
-
-    Construct with defaults, then override from CLI flags or a config file.
-    """
+    """Runtime scan configuration — merged from defaults, TOML, and CLI."""
 
     entropy_threshold: float = DEFAULT_ENTROPY_THRESHOLD
     scan_extensions: set[str] = field(
         default_factory=lambda: set(DEFAULT_SCAN_EXTENSIONS)
     )
+    scan_filenames: set[str] = field(
+        default_factory=lambda: set(DEFAULT_SCAN_FILENAMES)
+    )
     exclude_patterns: list[str] = field(
         default_factory=lambda: list(DEFAULT_EXCLUDE_PATTERNS)
     )
     min_secret_length: int = MIN_SECRET_LENGTH
+    max_file_size: int = MAX_FILE_SIZE_BYTES
     max_findings: int = MAX_TERMINAL_FINDINGS
 
-    # Output controls
-    json_output: Optional[Path] = None
-    html_output: Optional[Path] = None
+    # Output
+    output_format: str = "terminal"  # terminal | json | sarif
+    output_file: Optional[Path] = None
     verbose: bool = False
 
-    # Pre-commit mode: when True, a HIGH finding causes non-zero exit.
+    # Behaviour
     block_on_high: bool = True
+    parallel_workers: int = 4
 
-    # Custom placeholder patterns (merged with built-in library).
+    # Extensibility
     extra_placeholder_patterns: list[str] = field(default_factory=list)
+    custom_rules: list[CustomRule] = field(default_factory=list)
+    allowlist_paths: list[str] = field(default_factory=list)
 
-    # ── Persistence ─────────────────────────────────────────────────────
+    # ── Loaders ─────────────────────────────────────────────────────────
 
     @classmethod
-    def from_file(cls, path: Path) -> "ScanConfig":
-        """Load configuration from a JSON file, falling back to defaults
-        for any missing keys."""
-        data = json.loads(path.read_text(encoding="utf-8"))
+    def from_toml(cls, path: Path) -> "ScanConfig":
+        """Load configuration from a ``secretguard.toml`` file."""
+        if tomllib is None:
+            return cls()
+        try:
+            raw = path.read_bytes()
+            data: dict[str, Any] = tomllib.loads(raw.decode("utf-8"))
+        except Exception:
+            return cls()
+
+        scan_section = data.get("scan", {})
+        rules_section = data.get("rules", [])
+
+        custom_rules = []
+        for r in rules_section:
+            custom_rules.append(CustomRule(
+                id=r.get("id", "custom"),
+                pattern=r.get("pattern", ""),
+                description=r.get("description", ""),
+                severity=r.get("severity", "HIGH"),
+            ))
+
         return cls(
-            entropy_threshold=data.get("entropy_threshold", DEFAULT_ENTROPY_THRESHOLD),
-            scan_extensions=set(
-                data.get("scan_extensions", DEFAULT_SCAN_EXTENSIONS)
+            entropy_threshold=scan_section.get(
+                "entropy_threshold", DEFAULT_ENTROPY_THRESHOLD
             ),
-            exclude_patterns=data.get("exclude_patterns", DEFAULT_EXCLUDE_PATTERNS),
-            min_secret_length=data.get("min_secret_length", MIN_SECRET_LENGTH),
-            max_findings=data.get("max_findings", MAX_TERMINAL_FINDINGS),
-            verbose=data.get("verbose", False),
-            block_on_high=data.get("block_on_high", True),
-            extra_placeholder_patterns=data.get("extra_placeholder_patterns", []),
+            scan_extensions=set(
+                scan_section.get("extensions", DEFAULT_SCAN_EXTENSIONS)
+            ),
+            exclude_patterns=scan_section.get(
+                "exclude", DEFAULT_EXCLUDE_PATTERNS
+            ),
+            min_secret_length=scan_section.get(
+                "min_secret_length", MIN_SECRET_LENGTH
+            ),
+            max_file_size=scan_section.get(
+                "max_file_size", MAX_FILE_SIZE_BYTES
+            ),
+            parallel_workers=scan_section.get("parallel_workers", 4),
+            extra_placeholder_patterns=scan_section.get(
+                "extra_placeholders", []
+            ),
+            custom_rules=custom_rules,
+            allowlist_paths=scan_section.get("allowlist_paths", []),
         )
 
-    def to_dict(self) -> dict:
-        """Serialize to a JSON-friendly dict."""
-        return {
-            "entropy_threshold": self.entropy_threshold,
-            "scan_extensions": sorted(self.scan_extensions),
-            "exclude_patterns": self.exclude_patterns,
-            "min_secret_length": self.min_secret_length,
-            "max_findings": self.max_findings,
-            "verbose": self.verbose,
-            "block_on_high": self.block_on_high,
-            "extra_placeholder_patterns": self.extra_placeholder_patterns,
-        }
+    @classmethod
+    def load(cls, root: Path) -> "ScanConfig":
+        """Auto-discover ``secretguard.toml`` from *root* and load it."""
+        toml_path = root / "secretguard.toml"
+        if toml_path.is_file():
+            return cls.from_toml(toml_path)
+        return cls()

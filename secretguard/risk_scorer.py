@@ -1,29 +1,8 @@
 """
-Composite risk scorer for SecretGuard-AI findings.
+Composite risk scorer for SecretGuard AI findings.
 
-Combines four orthogonal signals into a single **risk label**
-(``HIGH``, ``MEDIUM``, or ``LOW``) per finding:
-
-1. **Entropy** — Shannon entropy of the raw value.
-2. **Charset diversity** — bonus from mixed character classes.
-3. **File-type weight** — ``.env`` files are riskier than ``.json``.
-4. **Placeholder-swap flag** — behavioral signal from diff analysis.
-
-Scoring formula
-───────────────
-    raw_score  = entropy × charset_bonus × file_weight
-    if placeholder_swap:
-        raw_score += SWAP_BONUS          # +2.0 — strong behavioral signal
-
-    Label mapping:
-        raw_score ≥ HIGH_THRESHOLD  →  HIGH   (blocks commit)
-        raw_score ≥ MED_THRESHOLD   →  MEDIUM (warning)
-        else                        →  LOW    (informational)
-
-The thresholds are chosen so that:
-- A base64 secret in a ``.env`` file  →  HIGH  (entropy ≈ 5.5, bonus ~1.3, weight 1.5 → ~10.7)
-- A placeholder swap to high-entropy  →  HIGH  (swap bonus alone pushes it over)
-- An English-word "password" in YAML  →  LOW   (entropy ≈ 3.5 → ~5.2)
+Combines entropy, charset diversity, file-type weight, placeholder-swap/lineage,
+and allowlist filtering into a single HIGH/MEDIUM/LOW label.
 """
 
 from __future__ import annotations
@@ -31,52 +10,47 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from secretguard.allowlist import is_allowed, load_allowlist
 from secretguard.config import ScanConfig
-from secretguard.entropy import shannon_entropy, charset_bonus, is_high_entropy
+from secretguard.entropy import charset_bonus, shannon_entropy
 from secretguard.placeholders import is_placeholder
 from secretguard.scanner import Finding
 
-
-# ── Thresholds ──────────────────────────────────────────────────────────────
-
 HIGH_THRESHOLD: float = 7.0
 MEDIUM_THRESHOLD: float = 5.0
-SWAP_BONUS: float = 2.0          # Flat bonus when a placeholder swap is detected.
+SWAP_BONUS: float = 2.0
 
-# File-extension risk weights.  Higher = riskier environment.
 _FILE_WEIGHTS: dict[str, float] = {
-    ".env":  1.5,   # Environment files are the most dangerous — often loaded at runtime.
-    ".py":   1.2,
-    ".js":   1.2,
-    ".ts":   1.2,
-    ".yaml": 1.1,
-    ".yml":  1.1,
-    ".json": 1.0,
-    ".toml": 1.0,
-    ".cfg":  1.1,
-    ".ini":  1.1,
+    ".env": 1.5, ".py": 1.2, ".js": 1.2, ".ts": 1.2,
+    ".tf": 1.3, ".yaml": 1.1, ".yml": 1.1,
+    ".json": 1.0, ".toml": 1.0, ".cfg": 1.1, ".ini": 1.1,
 }
 
 
-def score_finding(finding: Finding, config: Optional[ScanConfig] = None) -> Finding:
-    """Compute and assign a composite risk label to *finding*.
-
-    Mutates the finding in place (sets ``.entropy``, ``.is_placeholder``,
-    ``.risk``, and ``.reason``).
-
-    Args:
-        finding: A :class:`~secretguard.scanner.Finding` from the scanner.
-        config:  Optional configuration for threshold overrides.
-
-    Returns:
-        The same finding, enriched with risk data.
-    """
+def score_finding(
+    finding: Finding,
+    config: Optional[ScanConfig] = None,
+    allowlist_patterns: Optional[list[str]] = None,
+) -> Finding:
+    """Compute and assign a composite risk label to *finding*."""
     config = config or ScanConfig()
+    allowlist_patterns = allowlist_patterns or []
 
-    # ── Step 1: Entropy ─────────────────────────────────────────────────
+    # ── Allowlist check ─────────────────────────────────────────────────
+    if allowlist_patterns and is_allowed(
+        filepath=finding.file,
+        variable=finding.variable,
+        raw_value=finding.raw_value,
+        patterns=allowlist_patterns,
+    ):
+        finding.risk = "SUPPRESSED"
+        finding.reason = "Suppressed by allowlist."
+        return finding
+
+    # ── Entropy ─────────────────────────────────────────────────────────
     finding.entropy = shannon_entropy(finding.raw_value)
 
-    # ── Step 2: Placeholder check ───────────────────────────────────────
+    # ── Placeholder check ───────────────────────────────────────────────
     finding.is_placeholder = is_placeholder(
         finding.raw_value, extra_patterns=config.extra_placeholder_patterns
     )
@@ -86,30 +60,34 @@ def score_finding(finding: Finding, config: Optional[ScanConfig] = None) -> Find
         finding.reason = "Value matches a known placeholder pattern."
         return finding
 
-    # ── Step 3: Composite score ─────────────────────────────────────────
+    # ── Composite score ─────────────────────────────────────────────────
     cb = charset_bonus(finding.raw_value)
     ext = Path(finding.file).suffix.lower()
     fw = _FILE_WEIGHTS.get(ext, 1.0)
+    # Dockerfile has no extension — use .env weight
+    if Path(finding.file).name == "Dockerfile":
+        fw = 1.4
 
     raw_score = finding.entropy * cb * fw
 
     if finding.placeholder_swap:
         raw_score += SWAP_BONUS
 
-    # ── Step 4: Label mapping ───────────────────────────────────────────
+    # ── Label mapping ───────────────────────────────────────────────────
     if raw_score >= HIGH_THRESHOLD:
         finding.risk = "HIGH"
         reasons = [f"High entropy ({finding.entropy:.2f} bits)"]
         if finding.placeholder_swap:
             reasons.append("Placeholder-to-secret swap detected")
         if fw > 1.0:
-            reasons.append(f"Sensitive file type ({ext})")
+            reasons.append(f"Sensitive file type ({ext or Path(finding.file).name})")
+        if finding.commit_sha:
+            reasons.append(f"Historical swap at {finding.commit_sha}")
         finding.reason = "; ".join(reasons) + "."
     elif raw_score >= MEDIUM_THRESHOLD:
         finding.risk = "MEDIUM"
         finding.reason = (
-            f"Moderate entropy ({finding.entropy:.2f} bits); "
-            f"review recommended."
+            f"Moderate entropy ({finding.entropy:.2f} bits); review recommended."
         )
     else:
         finding.risk = "LOW"
@@ -121,11 +99,16 @@ def score_finding(finding: Finding, config: Optional[ScanConfig] = None) -> Find
 def score_findings(
     findings: list[Finding],
     config: Optional[ScanConfig] = None,
+    repo_root: Optional[Path] = None,
 ) -> list[Finding]:
-    """Score a batch of findings.
+    """Score a batch of findings, loading allowlist from *repo_root*."""
+    config = config or ScanConfig()
+    allowlist = []
+    if repo_root:
+        allowlist = load_allowlist(repo_root)
+        # Also merge config-level allowlist paths
+        allowlist.extend(config.allowlist_paths)
 
-    Convenience wrapper that calls :func:`score_finding` on each element.
-    """
     for finding in findings:
-        score_finding(finding, config)
+        score_finding(finding, config, allowlist)
     return findings

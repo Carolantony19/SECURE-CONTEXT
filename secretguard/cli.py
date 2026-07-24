@@ -1,12 +1,11 @@
 """
-CLI entry point for SecretGuard-AI.
+CLI entry point for SecretGuard AI.
 
-Provides two main commands:
-
-- ``secretguard scan <path>``  — Standalone full-repo audit.
-- ``secretguard hook``         — Pre-commit hook mode (scans staged files).
-
-Built with Click for clean argument parsing and help generation.
+Two main operating modes:
+- ``secretguard check --staged``  — Fast pre-commit mode (scans staged files).
+- ``secretguard scan [path]``     — Full directory audit.
+- ``secretguard scan --history``  — Deep full-repo git history analysis.
+- ``secretguard init``            — Setup helper.
 """
 
 from __future__ import annotations
@@ -20,7 +19,8 @@ import click
 from secretguard import __version__
 from secretguard.config import ScanConfig
 from secretguard.diff_analyzer import enrich_with_diff, get_staged_files
-from secretguard.report import export_html, export_json, render_terminal
+from secretguard.history_analyzer import analyze_history
+from secretguard.report import export_json, export_sarif, render_terminal
 from secretguard.risk_scorer import score_findings
 from secretguard.scanner import Finding, scan_directory, scan_file
 
@@ -32,33 +32,30 @@ def _run_pipeline(
     *,
     use_diff: bool = False,
 ) -> list[Finding]:
-    """Execute the full detection pipeline on a list of files.
-
-    Pipeline stages:
-        1. scanner.scan_file    →  raw findings (regex matches)
-        2. risk_scorer.score    →  entropy + placeholder + composite score
-        3. diff_analyzer.enrich →  placeholder-swap enrichment (optional)
-        4. risk_scorer.score    →  re-score after swap data (updates labels)
-
-    Returns:
-        List of fully-scored findings.
-    """
+    """Execute the full detection pipeline on a list of files."""
     all_findings: list[Finding] = []
-
     for filepath in files:
-        findings = scan_file(filepath, config)
-        all_findings.extend(findings)
+        all_findings.extend(scan_file(filepath, config))
 
-    # First pass: score with entropy + placeholder info.
-    score_findings(all_findings, config)
+    score_findings(all_findings, config, repo_root)
 
-    # Diff enrichment (only when inside a git repo with history).
     if use_diff:
         enrich_with_diff(all_findings, repo_root, config)
-        # Re-score after diff data may have set placeholder_swap flags.
-        score_findings(all_findings, config)
+        score_findings(all_findings, config, repo_root)
 
     return all_findings
+
+
+def _output(findings: list[Finding], config: ScanConfig) -> None:
+    """Route output to the configured format."""
+    if config.output_format == "json" and config.output_file:
+        export_json(findings, config.output_file)
+        click.echo(f"📄 JSON report saved to {config.output_file}")
+    elif config.output_format == "sarif" and config.output_file:
+        export_sarif(findings, config.output_file)
+        click.echo(f"📄 SARIF report saved to {config.output_file}")
+    else:
+        render_terminal(findings, config)
 
 
 # ── CLI group ───────────────────────────────────────────────────────────────
@@ -67,191 +64,164 @@ def _run_pipeline(
 @click.group()
 @click.version_option(version=__version__, prog_name="secretguard")
 def main() -> None:
-    """🔒 SecretGuard-AI — Detect AI-introduced hardcoded secrets."""
+    """🔒 SecretGuard AI — Detect AI-introduced hardcoded secrets."""
 
 
-# ── scan command ────────────────────────────────────────────────────────────
+# ── check command (pre-commit mode) ────────────────────────────────────────
+
+
+@main.command()
+@click.option("--staged", is_flag=True, default=False,
+              help="Scan only git-staged files (pre-commit mode).")
+@click.option("--threshold", "-t", type=float, default=4.5,
+              show_default=True, help="Shannon entropy threshold (bits).")
+@click.option("--format", "fmt", type=click.Choice(["terminal", "json", "sarif"]),
+              default="terminal", help="Output format.")
+@click.option("--output", "-o", type=click.Path(), default=None,
+              help="Output file path (for json/sarif).")
+def check(staged: bool, threshold: float, fmt: str, output: Optional[str]) -> None:
+    """Pre-commit check — scan staged files or working directory.
+
+    Examples:
+        secretguard check --staged
+        secretguard check --staged --format sarif -o results.sarif
+    """
+    repo_root = Path.cwd().resolve()
+    config = ScanConfig.load(repo_root)
+    config.entropy_threshold = threshold
+    config.output_format = fmt
+    config.output_file = Path(output) if output else None
+    config.block_on_high = True
+
+    if staged:
+        files = get_staged_files(repo_root)
+        if not files:
+            click.echo("SecretGuard: No staged files to scan.")
+            sys.exit(0)
+        files = [f for f in files if f.suffix.lower() in config.scan_extensions
+                 or f.name in config.scan_filenames]
+    else:
+        files = [
+            f for f in repo_root.rglob("*")
+            if f.is_file() and (f.suffix.lower() in config.scan_extensions
+                                or f.name in config.scan_filenames)
+        ]
+
+    findings = _run_pipeline(files, repo_root, config, use_diff=staged)
+    display = findings if config.verbose else [
+        f for f in findings if f.risk not in ("LOW", "SUPPRESSED")
+    ]
+
+    _output(display, config)
+
+    high_count = sum(1 for f in findings if f.risk == "HIGH")
+    sys.exit(1 if high_count > 0 else 0)
+
+
+# ── scan command (full audit) ──────────────────────────────────────────────
 
 
 @main.command()
 @click.argument("path", type=click.Path(exists=True), default=".")
-@click.option(
-    "--threshold",
-    "-t",
-    type=float,
-    default=4.5,
-    show_default=True,
-    help="Shannon entropy threshold (bits).",
-)
-@click.option(
-    "--json",
-    "json_path",
-    type=click.Path(),
-    default=None,
-    help="Export findings to a JSON file.",
-)
-@click.option(
-    "--html",
-    "html_path",
-    type=click.Path(),
-    default=None,
-    help="Export findings to an HTML report.",
-)
-@click.option(
-    "--verbose",
-    "-v",
-    is_flag=True,
-    default=False,
-    help="Show LOW-risk findings in output.",
-)
-@click.option(
-    "--no-block",
-    is_flag=True,
-    default=False,
-    help="Don't exit with non-zero code on HIGH findings.",
-)
+@click.option("--history", is_flag=True, default=False,
+              help="Walk full git history for placeholder-lineage swaps.")
+@click.option("--threshold", "-t", type=float, default=4.5,
+              show_default=True, help="Shannon entropy threshold (bits).")
+@click.option("--format", "fmt", type=click.Choice(["terminal", "json", "sarif"]),
+              default="terminal", help="Output format.")
+@click.option("--output", "-o", type=click.Path(), default=None,
+              help="Output file path (for json/sarif).")
+@click.option("--verbose", "-v", is_flag=True, default=False,
+              help="Show LOW-risk findings.")
+@click.option("--no-block", is_flag=True, default=False,
+              help="Don't exit with non-zero on HIGH findings.")
 def scan(
-    path: str,
-    threshold: float,
-    json_path: Optional[str],
-    html_path: Optional[str],
-    verbose: bool,
-    no_block: bool,
+    path: str, history: bool, threshold: float,
+    fmt: str, output: Optional[str], verbose: bool, no_block: bool,
 ) -> None:
     """Scan a file or directory for hardcoded secrets.
 
     Examples:
-
         secretguard scan .
-        secretguard scan src/ --threshold 5.0 --json report.json
-        secretguard scan config.env --html report.html
+        secretguard scan src/ --threshold 5.0 --format json -o report.json
+        secretguard scan . --history
     """
     target = Path(path).resolve()
-    config = ScanConfig(
-        entropy_threshold=threshold,
-        verbose=verbose,
-        block_on_high=not no_block,
-    )
+    config = ScanConfig.load(target if target.is_dir() else target.parent)
+    config.entropy_threshold = threshold
+    config.output_format = fmt
+    config.output_file = Path(output) if output else None
+    config.verbose = verbose
+    config.block_on_high = not no_block
+
+    findings: list[Finding] = []
 
     if target.is_file():
-        files = [target]
+        findings = _run_pipeline([target], target.parent, config, use_diff=True)
     else:
-        # Collect all files (scan_directory returns findings directly,
-        # but we need file list for the pipeline).
-        files = [
-            f
-            for f in target.rglob("*")
-            if f.is_file() and f.suffix.lower() in config.scan_extensions
-        ]
+        findings = scan_directory(target, config)
+        score_findings(findings, config, target)
 
-    findings = _run_pipeline(files, target, config, use_diff=True)
+    # History mode: also walk the full git log
+    if history:
+        click.echo("🔍 Analyzing full git history (this may take a moment)…")
+        lineage = analyze_history(target, config)
+        score_findings(lineage, config, target)
+        findings.extend(lineage)
 
-    # Filter for display.
-    display = findings if verbose else [f for f in findings if f.risk != "LOW"]
+    display = findings if verbose else [
+        f for f in findings if f.risk not in ("LOW", "SUPPRESSED")
+    ]
 
-    render_terminal(display, config)
+    _output(display, config)
 
-    if json_path:
-        export_json(findings, Path(json_path))
-        click.echo(f"\n📄 JSON report saved to {json_path}")
-
-    if html_path:
-        export_html(findings, Path(html_path))
-        click.echo(f"\n📄 HTML report saved to {html_path}")
+    if fmt == "json" and output:
+        export_json(findings, Path(output))
+    if fmt == "sarif" and output:
+        export_sarif(findings, Path(output))
 
     high_count = sum(1 for f in findings if f.risk == "HIGH")
     if high_count > 0 and config.block_on_high:
         sys.exit(1)
 
 
-# ── hook command (pre-commit mode) ──────────────────────────────────────────
-
-
-@main.command()
-@click.option(
-    "--threshold",
-    "-t",
-    type=float,
-    default=4.5,
-    show_default=True,
-    help="Shannon entropy threshold (bits).",
-)
-def hook(threshold: float) -> None:
-    """Run in pre-commit hook mode (scans staged files only).
-
-    This command is invoked by the git pre-commit hook.  It:
-    1. Identifies staged files via GitPython.
-    2. Runs the full detection pipeline with diff analysis.
-    3. Blocks the commit (exit 1) if any HIGH-risk finding is detected.
-    """
-    repo_root = Path.cwd().resolve()
-    config = ScanConfig(
-        entropy_threshold=threshold,
-        block_on_high=True,
-    )
-
-    staged = get_staged_files(repo_root)
-    if not staged:
-        click.echo("SecretGuard: No staged files to scan.")
-        sys.exit(0)
-
-    # Filter to supported extensions.
-    files = [f for f in staged if f.suffix.lower() in config.scan_extensions]
-    if not files:
-        click.echo("SecretGuard: No scannable files in staging area.")
-        sys.exit(0)
-
-    findings = _run_pipeline(files, repo_root, config, use_diff=True)
-    display = [f for f in findings if f.risk != "LOW"]
-
-    render_terminal(display, config)
-
-    high_count = sum(1 for f in findings if f.risk == "HIGH")
-    if high_count > 0:
-        sys.exit(1)
-    else:
-        sys.exit(0)
-
-
-# ── init command (setup helper) ─────────────────────────────────────────────
+# ── init command ────────────────────────────────────────────────────────────
 
 
 @main.command()
 def init() -> None:
-    """Initialize SecretGuard in the current repository.
-
-    Creates a ``.gitignore`` entry for ``.env`` and installs the
-    pre-commit hook configuration.
-    """
+    """Initialize SecretGuard in the current repository."""
     repo_root = Path.cwd().resolve()
 
-    # Update .gitignore
+    # .gitignore updates
     gitignore = repo_root / ".gitignore"
-    entries_to_add = [".env", ".env.local", ".env.*.local"]
-
-    if gitignore.exists():
-        existing = gitignore.read_text(encoding="utf-8")
-    else:
-        existing = ""
-
-    added = []
-    for entry in entries_to_add:
-        if entry not in existing:
-            added.append(entry)
-
+    entries = [".env", ".env.local", ".env.*.local"]
+    existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
+    added = [e for e in entries if e not in existing]
     if added:
         with gitignore.open("a", encoding="utf-8") as f:
-            f.write("\n# SecretGuard-AI: prevent committing secret files\n")
+            f.write("\n# SecretGuard AI: prevent committing secret files\n")
             for entry in added:
                 f.write(f"{entry}\n")
         click.echo(f"✅ Added {', '.join(added)} to .gitignore")
-    else:
-        click.echo("ℹ️  .gitignore already contains .env entries.")
+
+    # Create example .secretguardignore
+    ignore_file = repo_root / ".secretguardignore"
+    if not ignore_file.exists():
+        ignore_file.write_text(
+            "# SecretGuard AI allowlist\n"
+            "# One pattern per line. Supports:\n"
+            "#   - File globs: tests/fixtures/*\n"
+            "#   - Variable names: EXAMPLE_KEY\n"
+            "#   - SHA-256 fingerprints: sha256:<hex>\n",
+            encoding="utf-8",
+        )
+        click.echo("✅ Created .secretguardignore")
 
     click.echo(
-        "\n🔒 SecretGuard initialized!\n"
+        "\n🔒 SecretGuard AI initialized!\n"
         "   Run 'secretguard scan .' to audit your repository.\n"
-        "   See README.md for pre-commit hook setup."
+        "   Run 'secretguard check --staged' in your pre-commit hook."
     )
 
 

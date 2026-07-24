@@ -36,20 +36,7 @@ from collections import Counter
 def shannon_entropy(value: str) -> float:
     """Compute Shannon entropy (bits per character) for *value*.
 
-    Args:
-        value: The string to measure.  An empty string returns 0.0.
-
-    Returns:
-        Entropy in bits, ranging from 0.0 (single repeated char) up to
-        log₂(alphabet_size) for a perfectly uniform distribution.
-
-    Examples:
-        >>> round(shannon_entropy("aaaa"), 2)
-        0.0
-        >>> round(shannon_entropy("abcd"), 2)
-        2.0
-        >>> shannon_entropy("sk-fake000000000000000000000000") > 3.0
-        True
+    Returns 0.0 for empty strings. Handles non-ASCII correctly.
     """
     if not value:
         return 0.0
@@ -69,15 +56,8 @@ def shannon_entropy(value: str) -> float:
 def normalized_entropy(value: str) -> float:
     """Entropy normalized to [0, 1] based on the string's charset.
 
-    Useful for comparing strings of different lengths and character sets.
     A value of 1.0 means every character appears with equal frequency
     (maximum randomness for the given alphabet).
-
-    Args:
-        value: The string to measure.
-
-    Returns:
-        Normalized entropy in [0.0, 1.0].
     """
     if len(value) <= 1:
         return 0.0
@@ -98,9 +78,6 @@ def charset_bonus(value: str) -> float:
     Real secrets tend to use multiple character classes (uppercase, lowercase,
     digits, symbols).  Placeholder tokens like ``YOUR_KEY_HERE`` typically
     use only uppercase + underscore.
-
-    This bonus is multiplied into the composite risk score by
-    :mod:`secretguard.risk_scorer`.
     """
     classes_present = 0
     if any(c in string.ascii_lowercase for c in value):
@@ -117,13 +94,5 @@ def charset_bonus(value: str) -> float:
 
 
 def is_high_entropy(value: str, threshold: float = 4.5) -> bool:
-    """Quick predicate: is this value's entropy above *threshold*?
-
-    Args:
-        value:     String to test.
-        threshold: Bits-per-character cutoff (default 4.5).
-
-    Returns:
-        True if ``shannon_entropy(value) >= threshold``.
-    """
+    """Quick predicate: is this value's entropy above *threshold*?"""
     return shannon_entropy(value) >= threshold

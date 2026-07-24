@@ -175,8 +175,8 @@ Current secret-detection tools are pattern-based and reactive — they scan for 
        ├── pyproject.toml                  
        ├── CONTRIBUTING.md                 
        ├── SECURITY.md                     
-       ├── README.md                       
-       └── LICENSE                         
+       └── README.md                       
+                              
 
 # SECURITY MEASURES
         1. Strict Value Masking: Raw secret values detected in scanned files are masked in terminal reports, log outputs, JSON, and HTML exports (showing only the first 6 characters followed by asterisks) to prevent secondary credential leaks in build logs or console output.

@@ -35,141 +35,160 @@ Current secret-detection tools are pattern-based and reactive — they scan for 
        - GitHub Actions (stretch CI)
        - Flask + static HTML/JS (stretch dashboard)
 # SYSTEM ARCHITECTURE DIAGRAM
-                  ┌─────────────────────────────────────────┐
-                  │            git commit action            │
-                  └────────────────────┬────────────────────┘
-                                       │
-                                       ▼
-                  ┌─────────────────────────────────────────┐
-                  │            pre-commit Hook              │
-                  │         (Triggers CLI Engine)           │
-                  └────────────────────┬────────────────────┘
-                                       │
-                                       ▼
-                  ┌─────────────────────────────────────────┐
-                  │             Diff Extractor              │
-                  │   (Parses added/modified lines & AST)   │
-                  └────────────────────┬────────────────────┘
-                                       │
-                                 ┌─────┴─────┐
-                                 │           │
-                                 ▼           ▼
-                   ┌──────────────────┐ ┌──────────────────┐
-                   │ Staged Added     │ │ Staged Deleted/  │
-                   │ Lines            │ │ Git History      │
-                   └────────┬─────────┘ └────────┬─────────┘
-                            │                    │
-                            └──────────┬─────────┴────────┐
-                                       │                  │
-                                       ▼                  ▼
-          ┌────────────────────────────────────────┐ ┌───────────────────────────────┐
-          │           Analysis Pipeline            │ │    State Engine (Context)     │
-          │ 1. Known Regex Pattern Matcher        │ │ 1. Historical Placeholder     │
-          │ 2. Shannon Entropy Calculator          │ │    Substitution Tracker       │
-          │ 3. AI-Boilerplate Context Parser       │ │ 2. File Scoping & Environment │
-          │ 4. Comment/Docstring Proximity Inspector│ │    Path Heuristics            │
-          └───────────────────┬────────────────────┘ └──────────────┬────────────────┘
-                    │                                     │
-                    └──────────────────┬──────────────────┘
-                                       │
-                                       ▼
-                  ┌─────────────────────────────────────────┐
-                  │            Risk Scoring Model           │
-                  │     S = w1(Pattern) + w2(Entropy) +     │
-                  │       w3(Context) + w4(History)         │
-                  └────────────────────┬────────────────────┘
-                                       │
-                          ┌────────────┴────────────┐
-             Score >= Threshold?                    Score < Threshold?
-                          │                                 │
-                          ▼                                 ▼
-         ┌─────────────────────────────────┐       ┌─────────────────┐
-         │       BLOCK COMMIT & REPORT     │       │   ALLOW COMMIT  │
-         │ - Terminal warning display      │       └─────────────────┘
-         │ - Suggest env var substitution  │
-         │ - Auto-fix prompt (.env insert) │
-         └─────────────────────────────────┘
+                               ┌─────────────────────────┐
+                               │     TRIGGER SOURCES     │
+                               └────────────┬────────────┘
+                                            │
+        ┌───────────────────────────────────┼───────────────────────────────────┐
+        ▼                                   ▼                                   ▼
+    Git Pre-Commit Hook                  CLI Execution                   GitHub CI Pipeline
+    (secretguard check --staged)        (secretguard scan .)           (secretguard-ci.yml)
+        │                                   │                                   │
+        └───────────────────────────────────┼───────────────────────────────────┘
+                                            │
+                                            ▼
+                               ┌─────────────────────────┐
+                               │   CONFIG & ALLOWLIST    │
+                               │   - secretguard.toml    │
+                               │   - .secretguardignore  │
+                               └────────────┬────────────┘
+                                            │
+                                            ▼
+                               ┌─────────────────────────┐
+                               │   PARALLEL FILE SCAN    │
+                               │  ThreadPoolExecutor(4)  │
+                               │  Regex Match (.py, .tf, │
+                               │  .env, .yaml, .json...) │
+                               └────────────┬────────────┘
+                                            │
+                                            ▼
+                               ┌─────────────────────────┐
+                               │  QUANTITATIVE ANALYSIS  │
+                               ├─────────────────────────┤
+                               │  • Shannon Entropy      │
+                               │  • Charset Diversity    │
+                               │  • Placeholder Matching │
+                               └────────────┬────────────┘
+                                            │
+                                            ▼
+                               ┌─────────────────────────┐
+                               │  BEHAVIORAL LINEAGE     │
+                               ├─────────────────────────┤
+                               │  • Staged Diff Swap     │
+                               │  • Git Log Traversal    │
+                               │    (History Analyser)   │
+                               └────────────┬────────────┘
+                                            │
+                                            ▼
+                               ┌─────────────────────────┐
+                               │ COMPOSITE RISK SCORER   │
+                               │ Raw = H(x)×Cb×Fw + Swap  │
+                               │ 🔴 HIGH │ 🟡 MED │ 🟢 LOW│
+                               └────────────┬────────────┘
+                                            │
+                                            ▼
+                               ┌─────────────────────────┐
+                               │   OUTPUT & ENFORCEMENT  │
+                               ├─────────────────────────┤
+                               │  • Rich Terminal Table  │
+                               │  • JSON Report          │
+                               │  • SARIF 2.1.0 (GitHub) │
+                               │  • Exit 1 (Block Commit)│
+                               └─────────────────────────┘
 # WORKFLOW
-     ──────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │                                       TRIGGER PHASE                                               │
-    │                                                                                                  │
-    │   Developer runs `git commit`  OR  `secretguard scan <path>`  OR  GitHub PR Action               │
-    └─────────────────────────────────┬────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-    ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │                                   PHASE 1: FILE DISCOVERY                                        │
-    │                                                                                                  │
-    │   [GitPython / File System] ──> Filter by Extension (.py, .js, .env, .json, .yaml)               │
-    │                             ──> Exclude Ignore Patterns (node_modules, venv, .git)              │
-    └─────────────────────────────────┬────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-    ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │                                PHASE 2: DETECTION PIPELINE                                       │
-    │                                                                                                  │
-    │  [1. Regex Scanner]         Finds key assignments: `api_key = "..."`, `SECRET: "..."`           │
-    │         │                                                                                        │
-    │         ▼                                                                                        │
-    │  [2. Length Cutoff]         Filters out trivial values (< 8 chars)                               │
-    │         │                                                                                        │
-    │         ▼                                                                                        │
-    │  [3. Entropy Calculator]    Computes Shannon entropy: H(X) = -Σ p(x) log₂(p(x))                 │
-    │         │                                                                                        │
-    │         ▼                                                                                        │
-    │  [4. Placeholder Engine]    Matches against 25+ AI patterns (`YOUR_API_KEY_HERE`, `<KEY>`, etc.)  │
-    │         │                                                                                        │
-    │         ▼                                                                                        │
-    │  [5. Diff Analyzer]         Checks HEAD history: Did `old_val` = placeholder  AND                 │
-    │                             `new_val` = high-entropy candidate? (Placeholder Swap)               │
-    └─────────────────────────────────┬────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-    ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │                                PHASE 3: COMPOSITE RISK SCORING                                   │
-    │                                                                                                  │
-    │   Raw Score = Entropy × Charset Bonus (1.0 - 1.45) × File Weight (.env=1.5, .py=1.2)            │
-    │   If Placeholder Swap Detected  ──>  +2.0 Swap Bonus                                             │
-    │                                                                                                  │
-    │   Score Limits:  Score ≥ 7.0 ──> 🔴 HIGH  │  Score ≥ 5.0 ──> 🟡 MEDIUM  │  Else ──> 🟢 LOW         │
-    └─────────────────────────────────┬────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-    ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │                                PHASE 4: REPORT & ENFORCEMENT                                     │
-    │                                                                                                  │
-    │   Rich Terminal Report / JSON Export / HTML Dashboard                                            │
-    │                                                                                                  │
-    │   If 🔴 HIGH Findings Exist  ──> ⛔ Block Commit (Exit 1) + Show Remediation Guide              │
-    │   If Clean or Low Risk      ──> ✅ Allow Commit (Exit 0)                                       │
-    └──────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                  [Developer Actions]
+                                           │
+                                1. Runs `git commit`
+                                           │
+                                           ▼
+                                [Git Pre-Commit Hook]
+                                           │
+                          2. Executes `secretguard check --staged`
+                                           │
+                                           ▼
+                              [Staged File Discovery]
+                                           │
+                    3. Extracts staged files from Git Index via GitPython
+                    4. Filters out binaries, symlinks, files >10MB
+                                           │
+                                           ▼
+                              [Parallel Pattern Scan]
+                                           │
+                    5. Scans lines for secret assignments using Regex
+                    6. Calculates Shannon Entropy H(X) = -Σ p(x)log₂p(x)
+                                           │
+                                           ▼
+                             [Behavioral Swap Check]
+                                           │
+                    7. Compares committed HEAD value against staged value
+                    8. Detects: Placeholder ("YOUR_KEY") ➔ Candidate Secret
+                                           │
+                                           ▼
+                              [Composite Risk Scoring]
+                                           │
+                    9. Calculates Composite Score = Entropy × Charset × FileWeight + SwapBonus
+                   10. Maps to Risk Level: 🔴 HIGH (≥7.0), 🟡 MEDIUM (≥5.0), 🟢 LOW (<5.0)
+                                           │
+                                           ▼
+                            [Enforcement & Reporting]
+                                           │
+                         ┌─────────────────┴─────────────────┐
+                         ▼                                   ▼
+                 🔴 HIGH Risk Found                    🟢 Clean / Low Risk
+                         │                                   │
+              11. Mask Value (`sk-pro***`)          11. Print Success Banner
+              12. Print Remediation Guide           12. Exit Code 0 (Allow Commit)
+              13. Exit Code 1 (Block Commit)
 # FOLDER STRUCTURE
-          secretguard-ai/
-          ├── secretguard/
-          │   ├── __init__.py
-          │   ├── cli.py
-          │   ├── scanner.py
-          │   ├── entropy.py
-          │   ├── placeholders.py
-          │   ├── diff_analyzer.py
-          │   ├── risk_scorer.py
-          │   ├── report.py
-          │   └── config.py
-          ├── hooks/
-          │   └── pre_commit_hook.py
-          ├── .github/workflows/secretguard-ci.yml
-          ├── tests/
-          │   ├── test_entropy.py
-          │   ├── test_scanner.py
-          │   ├── test_placeholders.py
-          │   └── fixtures/
-          │       ├── clean_file.py
-          │       └── leaky_file.py
-          ├── examples/demo_repo/
-          ├── .pre-commit-config.yaml
-          ├── .gitignore
-          ├── pyproject.toml
-          └──README.md
+        secretguard-ai/
+        ├── secretguard/                    
+        │   ├── __init__.py                 
+        │   ├── cli.py                      
+        │   ├── scanner.py                  
+        │   ├── entropy.py                  
+        │   ├── placeholders.py             
+        │   ├── diff_analyzer.py            
+        │   ├── history_analyzer.py         
+        │   ├── risk_scorer.py              
+        │   ├── report.py                   
+        │   ├── config.py                   
+        │   └── allowlist.py                
+        ├── hooks/                          
+        │   └── pre_commit_hook.py          
+        ├── .pre-commit-hooks.yaml          
+        ├── .github/workflows/              
+        │   ├── secretguard-ci.yml         
+        │   └── test.yml                    
+        ├── tests/                          
+        │   ├── unit/                       
+        │   │   ├── test_allowlist.py
+        │   │   ├── test_cli.py
+        │   │   ├── test_config.py
+        │   │   ├── test_diff_analyzer.py
+        │   │   ├── test_entropy.py
+        │   │   ├── test_history_analyzer.py
+        │   │   ├── test_placeholders.py
+        │   │   ├── test_report.py
+        │   │   ├── test_risk_scorer.py
+        │   │   └── test_scanner.py
+        │   ├── integration/                
+        │   │   └── test_real_git_repo.py
+        │   └── fixtures/                   
+        ├── benchmarks/                     
+        │   └── run_benchmarks.py           
+        ├── docs/                           
+        │   └── configuration.md            
+        ├── examples/                       
+        │   └── demo_repo/                  
+        ├── secretguard.toml                
+        ├── .secretguardignore              # Example allowlist template
+        ├── .gitignore                      # Git ignore patterns
+        ├── pyproject.toml                  # PyPI packaging & dependency specification
+        ├── CONTRIBUTING.md                 # Developer contribution guidelines
+        ├── SECURITY.md                     # Vulnerability reporting security policy
+        ├── README.md                       
+        └── LICENSE                         
+
 # SECURITY MEASURES
         1. Strict Value Masking: Raw secret values detected in scanned files are masked in terminal reports, log outputs, JSON, and HTML exports (showing only the first 6 characters followed by asterisks) to prevent secondary credential leaks in build logs or console output.
        2.  Zero Ingest / Local-Only Processing: Scanner logic, diff analysis, and Shannon entropy calculations execute entirely client-side. No source code, diffs, or detected candidate strings are transmitted over external networks or third-party APIs.

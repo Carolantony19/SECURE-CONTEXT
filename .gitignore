@@ -1,0 +1,41 @@
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# ── Virtual environments ────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Secrets (never commit these!) ───────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── IDE ─────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Testing / coverage ─────────────────────────────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Excluded directories ───────────────────────────────────────────────────
+report.json
+report.html
+

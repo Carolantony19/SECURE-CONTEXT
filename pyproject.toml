@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secretguard-ai"
+version = "0.1.0"
+description = "Pre-commit security tool that detects hardcoded secrets introduced through AI-assisted coding"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "SecretGuard Contributors"}
+]
+keywords = ["security", "secrets", "pre-commit", "AI", "credential-detection"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+    "click>=8.1",
+    "gitpython>=3.1",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+]
+ci = [
+    "flask>=3.0",
+]
+
+[project.scripts]
+secretguard = "secretguard.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/your-org/secretguard-ai"
+Repository = "https://github.com/your-org/secretguard-ai"
+
+[tool.setuptools.packages.find]
+include = ["secretguard*", "hooks*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"

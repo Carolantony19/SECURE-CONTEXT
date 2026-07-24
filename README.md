@@ -145,58 +145,31 @@ Current secret-detection tools are pattern-based and reactive — they scan for 
     └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 # FOLDER STRUCTURE
           secretguard-ai/
-
           ├── secretguard/
-
           │   ├── __init__.py
-
           │   ├── cli.py
-
           │   ├── scanner.py
-
           │   ├── entropy.py
-
           │   ├── placeholders.py
-
           │   ├── diff_analyzer.py
-   
           │   ├── risk_scorer.py
-
           │   ├── report.py
-
           │   └── config.py
-
           ├── hooks/
-
           │   └── pre_commit_hook.py
-
           ├── .github/workflows/secretguard-ci.yml
-
           ├── tests/
-
           │   ├── test_entropy.py
-
           │   ├── test_scanner.py
-    
           │   ├── test_placeholders.py
-
           │   └── fixtures/
-
           │       ├── clean_file.py
-
           │       └── leaky_file.py
-
           ├── examples/demo_repo/
-
           ├── .pre-commit-config.yaml
-
           ├── .gitignore
-
           ├── pyproject.toml
-
-          ├── README.md
-
-          └── LICENSE
+          └──README.md
 # SECURITY MEASURES
         1. Strict Value Masking: Raw secret values detected in scanned files are masked in terminal reports, log outputs, JSON, and HTML exports (showing only the first 6 characters followed by asterisks) to prevent secondary credential leaks in build logs or console output.
        2.  Zero Ingest / Local-Only Processing: Scanner logic, diff analysis, and Shannon entropy calculations execute entirely client-side. No source code, diffs, or detected candidate strings are transmitted over external networks or third-party APIs.
